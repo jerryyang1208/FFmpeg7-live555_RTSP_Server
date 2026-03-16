@@ -107,14 +107,14 @@ private:
                 double ptsInSeconds = pkt.pts * fTimeBase;
                 fPresentationTime.tv_sec = fStartTime.tv_sec + (long)ptsInSeconds;
                 fPresentationTime.tv_usec = fStartTime.tv_usec + (long)((ptsInSeconds - (long)ptsInSeconds) * 1000000.0);
-                if (fPresentationTime.tv_usec >= 1000000) {
-                    fPresentationTime.tv_sec++;
-                    fPresentationTime.tv_usec -= 1000000;
-                }
 
-                // 注入 Duration (如果可用)，帮助 Framer 更好工作
-                fDurationInMicroseconds = (unsigned)(av_q2d(fmtCtx->streams[videoStreamIdx]->avg_frame_rate) > 0 ? 
-                                           1000000.0 / av_q2d(fmtCtx->streams[videoStreamIdx]->avg_frame_rate) : 0);
+               if (pkt.duration > 0) {
+                    fDurationInMicroseconds = (unsigned)(pkt.duration * fTimeBase * 1000000.0);
+                } else {
+                    // 根据帧率计算单帧时长（如 25fps = 40000us）
+                    double fps = av_q2d(fmtCtx->streams[videoStreamIdx]->avg_frame_rate);
+                    fDurationInMicroseconds = (unsigned)(fps > 0 ? 1000000.0 / fps : 40000);
+                }
 
                 av_packet_unref(&pkt);
                 FramedSource::afterGetting(this);
@@ -157,7 +157,7 @@ protected:
 
     virtual FramedSource* createNewStreamSource(unsigned, unsigned& estBitrate) {
         // 设置一个较高的估计码率，防止 Live555 限制带宽导致的丢包
-        estBitrate = 15000; 
+        estBitrate = 50000; 
         FFmpegVideoSource* baseSource = FFmpegVideoSource::createNew(envir(), fFileName);
         
         // 使用 ByteStreamMemoryBufferSource 思想的 Framer 能更好地处理 NALU
@@ -167,7 +167,7 @@ protected:
 
     virtual RTPSink* createNewRTPSink(Groupsock* rtpGroupsock, unsigned char rtpPayloadTypeIfDynamic, FramedSource*) {
         // --- 进一步提升 Socket 缓冲区 ---
-        setSendBufferTo(envir(), rtpGroupsock->socketNum(), 4 * 1024 * 1024); 
+        setSendBufferTo(envir(), rtpGroupsock->socketNum(), 8 * 1024 * 1024); 
         
         if (fIsH265) return H265VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic);
         return H264VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic);
