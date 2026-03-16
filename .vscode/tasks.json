@@ -1,0 +1,32 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "cd ${workspaceFolder} && mkdir -p build && cd build && cmake .. && make -j$(nproc)",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "detail": "CMake build task"
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "rm -rf ${workspaceFolder}/build",
+            "group": "build",
+            "problemMatcher": []
+        },
+        {
+            "label": "cmake-configure",
+            "type": "shell",
+            "command": "cd ${workspaceFolder} && mkdir -p build && cd build && cmake ..",
+            "group": "build",
+            "problemMatcher": []
+        }
+    ]
+}

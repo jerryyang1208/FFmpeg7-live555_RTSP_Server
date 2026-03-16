@@ -1,0 +1,58 @@
+{
+    "files.associations": {
+        "*.cpp": "cpp",
+        "*.h": "c",
+        "iostream": "cpp",
+        "queue": "cpp",
+        "thread": "cpp",
+        "mutex": "cpp",
+        "condition_variable": "cpp",
+        "atomic": "cpp",
+        "chrono": "cpp",
+        "iomanip": "cpp",
+        "algorithm": "cpp",
+        "cstdlib": "cpp",
+        "limits": "cpp",
+        "vector": "cpp",
+        "string": "cpp",
+        "new": "cpp",
+        "typeinfo": "cpp",
+        "array": "cpp",
+        "tuple": "cpp",
+        "utility": "cpp",
+        "cmath": "cpp",
+        "ctime": "cpp",
+        "fstream": "cpp",
+        "sstream": "cpp",
+        "map": "cpp",
+        "set": "cpp"
+    },
+    
+    "cmake.configureOnOpen": true,
+    "cmake.buildDirectory": "${workspaceFolder}/build",
+    "cmake.generator": "Unix Makefiles",
+    
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "C_Cpp.default.compilerPath": "/usr/bin/g++-13",
+    "C_Cpp.default.intelliSenseMode": "linux-gcc-x64",
+    "C_Cpp.errorSquiggles": "enabled",
+    "C_Cpp.default.includePath": [
+        "${workspaceFolder}/**",
+        "${HOME}/project/live555/liveMedia/include",
+        "${HOME}/project/live555/groupsock/include",
+        "${HOME}/project/live555/BasicUsageEnvironment/include",
+        "${HOME}/project/live555/UsageEnvironment/include"
+    ],
+    
+    "terminal.integrated.defaultProfile.linux": "bash",
+    
+    "files.exclude": {
+        "**/.git": true,
+        "**/.DS_Store": true,
+        "**/build": true
+    },
+    
+    "search.exclude": {
+        "**/build": true
+    }
+}
