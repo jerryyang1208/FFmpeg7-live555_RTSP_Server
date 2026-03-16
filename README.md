@@ -117,3 +117,26 @@ vlc rtsp://your-server-ip:8554/video.mp4
 - 连接被拒绝：检查防火墙设置 sudo ufw allow 8554/tcp，确认服务器地址 ip addr show 无误
 - 播放卡顿或花屏：增加 OutPacketBuffer 大小，检查确保网络带宽，降低视频码率或分辨率选择
 - 视频文件无法识别：目前可扩展使用的视频格式有限，待更新
+
+## 📝 更新日志
+
+### v1.0.0 (2026.3.16)
+- 建立完整项目框架内容，可正常运行并推拉流播放顺畅
+- 实现小部分视频格式的媒体文件发布为 RTSP 流
+- Tag 存放笔者最初练习实现的 Live555 库函数调用基础程序
+
+
+后续将尝试扩展项目的更多实用性泛用性。
+
+## 📄 许可证
+
+本项目仅供学习交流使用，FFmpeg 和 Live555 遵循其各自的开源许可证。
+
+## 👤 作者
+
+- GitHub: [@jerryyang1208](https://github.com/jerryyang1208)
+
+## ⭐ 致谢
+
+- [FFmpeg](https://ffmpeg.org/) 社区
+- [Live555](http://www.live555.com/) 开发团队
