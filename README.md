@@ -97,3 +97,23 @@ ffplay rtsp://your-server-ip:8554/video.mp4
 # 另开终端使用VLC（命令行）
 vlc rtsp://your-server-ip:8554/video.mp4
 ```
+## ⚙️ 配置说明
+
+### 服务器配置参数
+
+在 rtsp_server.cpp 中可调整以下参数：
+
+- 端口设置：默认8554，可在main()中修改
+- 缓冲区大小：OutPacketBuffer::maxSize = 10000000 (10MB)
+- Socket 缓冲区：setSendBufferTo(..., 4 * 1024 * 1024) (4MB)
+- 估计码率：estBitrate = 15000 (15Mbps)
+
+### 目前支持的视频格式（音频格式待后续更新）
+- MP4 封装：H.264/H.265 编码，自动转换为 AnnexB 格式传输
+- FLV 封装：H.264 编码
+- H.264 裸流：直接传输
+
+### 常见问题
+- 连接被拒绝：检查防火墙设置 sudo ufw allow 8554/tcp，确认服务器地址 ip addr show 无误
+- 播放卡顿或花屏：增加 OutPacketBuffer 大小，检查确保网络带宽，降低视频码率或分辨率选择
+- 视频文件无法识别：目前可扩展使用的视频格式有限，待更新
