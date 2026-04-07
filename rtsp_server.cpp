@@ -74,10 +74,6 @@ private:
             return;
         }
         
-        // 增加探测时间和大小，确保能够正确读取封面图片信息
-        fmtCtx->probesize = 10000000; // 10MB
-        fmtCtx->max_analyze_duration = 5000000; // 5秒
-        
         if (avformat_find_stream_info(fmtCtx, NULL) < 0) {
             envir() << "Error: Failed to find stream info\n";
             avformat_close_input(&fmtCtx);
@@ -129,9 +125,6 @@ private:
                     }
                 }
             }
-        } else if (vCodecPar->codec_id == AV_CODEC_ID_MJPEG) {
-            // 对于MJPEG格式（通常是音频文件的封面），也不需要转码
-            fNeedsTranscoding = false;
         } else {
             fNeedsTranscoding = true;
             setupTranscoder();
@@ -194,14 +187,12 @@ private:
         fEncCtx->max_b_frames = 0; // 禁用B帧，减少延迟
         fEncCtx->gop_size = 10; // 减小GOP大小，减少延迟
         
-        // 优化编码参数，平衡延迟和质量
+        // 极致降低延迟参数，防止阻塞 Live555 单线程
         AVDictionary* opt = NULL;
-        av_dict_set(&opt, "preset", "superfast", 0); // 稍微提高编码速度，减少卡顿
+        av_dict_set(&opt, "preset", "ultrafast", 0);
         av_dict_set(&opt, "tune", "zerolatency", 0);
         av_dict_set(&opt, "profile", "baseline", 0); // 使用baseline profile，减少复杂度
-        av_dict_set(&opt, "bufsize", "1000", 0); // 适当增加缓冲区大小，提高流畅度
-        av_dict_set(&opt, "rc_lookahead", "5", 0); // 适当启用lookahead，提高编码质量
-        av_dict_set(&opt, "mbtree", "1", 0); // 启用mbtree，提高编码质量
+        av_dict_set(&opt, "bufsize", "1000", 0); // 减小缓冲区大小
         
         if (avcodec_open2(fEncCtx, enc, &opt) < 0) {
             envir() << "Error: Failed to open encoder\n";
@@ -269,19 +260,12 @@ private:
         }
     }
 
-    // 直通模式：处理原生的 H.264 / H.265 / MJPEG
+    // 直通模式：处理原生的 H.264 / H.265
     void deliverDirectFrame() {
         if (!isCurrentlyAwaitingData()) return;
 
         if (!fmtCtx) {
             handleClosure();
-            return;
-        }
-
-        // 对于MJPEG格式（音频文件封面），只发送一帧
-        if (vCodecPar->codec_id == AV_CODEC_ID_MJPEG && fSentCoverFrame) {
-            // 已经发送过封面图片，等待一段时间后关闭
-            nextTask() = envir().taskScheduler().scheduleDelayedTask(1000000, (TaskFunc*)handleClosure, this);
             return;
         }
 
@@ -323,40 +307,28 @@ private:
                     return;
                 }
 
-                // 对于MJPEG格式，使用固定的时间戳，确保封面图片能够正确显示
-                if (vCodecPar->codec_id == AV_CODEC_ID_MJPEG) {
-                    fPresentationTime = fStartTime;
-                    fDurationInMicroseconds = 1000000; // 1秒
-                } else {
-                    double ptsInSeconds = pkt.pts * fTimeBase;
-                    fPresentationTime.tv_sec = fStartTime.tv_sec + (long)ptsInSeconds;
-                    fPresentationTime.tv_usec = fStartTime.tv_usec + (long)((ptsInSeconds - (long)ptsInSeconds) * 1000000.0);
-                    
-                    // 确保时间戳不为负
-                    if (fPresentationTime.tv_usec < 0) {
-                        fPresentationTime.tv_sec--;
-                        fPresentationTime.tv_usec += 1000000;
-                    }
-                    if (fPresentationTime.tv_sec < 0) {
-                        fPresentationTime.tv_sec = 0;
-                        fPresentationTime.tv_usec = 0;
-                    }
+                double ptsInSeconds = pkt.pts * fTimeBase;
+                fPresentationTime.tv_sec = fStartTime.tv_sec + (long)ptsInSeconds;
+                fPresentationTime.tv_usec = fStartTime.tv_usec + (long)((ptsInSeconds - (long)ptsInSeconds) * 1000000.0);
+                
+                // 确保时间戳不为负
+                if (fPresentationTime.tv_usec < 0) {
+                    fPresentationTime.tv_sec--;
+                    fPresentationTime.tv_usec += 1000000;
+                }
+                if (fPresentationTime.tv_sec < 0) {
+                    fPresentationTime.tv_sec = 0;
+                    fPresentationTime.tv_usec = 0;
+                }
 
-                    if (pkt.duration > 0) {
-                        fDurationInMicroseconds = (unsigned)(pkt.duration * fTimeBase * 1000000.0);
-                    } else {
-                        double fps = av_q2d(fmtCtx->streams[videoStreamIdx]->avg_frame_rate);
-                        fDurationInMicroseconds = (unsigned)(fps > 0 ? 1000000.0 / fps : 40000);
-                    }
+                if (pkt.duration > 0) {
+                    fDurationInMicroseconds = (unsigned)(pkt.duration * fTimeBase * 1000000.0);
+                } else {
+                    double fps = av_q2d(fmtCtx->streams[videoStreamIdx]->avg_frame_rate);
+                    fDurationInMicroseconds = (unsigned)(fps > 0 ? 1000000.0 / fps : 40000);
                 }
 
                 av_packet_unref(&pkt);
-                
-                // 标记已经发送过封面图片
-                if (vCodecPar->codec_id == AV_CODEC_ID_MJPEG) {
-                    fSentCoverFrame = true;
-                }
-                
                 FramedSource::afterGetting(this);
                 return;
             }
@@ -382,23 +354,19 @@ private:
         // 限制每帧处理时间，避免阻塞事件循环
         struct timeval start_time, current_time;
         gettimeofday(&start_time, NULL);
-        const long MAX_PROCESSING_TIME_US = 30000; // 30ms，进一步减少处理时间
+        const long MAX_PROCESSING_TIME_US = 50000; // 50ms
 
         // 状态机：首先尝试从编码器拉取上一轮可能缓存的包
         int ret = avcodec_receive_packet(fEncCtx, fEncPkt);
         if (ret == 0) {
-            // 处理缓存的包
-            processEncodedPacket();
-            return;
+            goto PACKET_READY;
         } else if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
             envir() << "Error: Failed to receive packet from encoder: " << ret << "\n";
             handleRetry();
             return;
         }
 
-        // 只处理一帧，避免长时间阻塞
-        bool frameProcessed = false;
-        while (!frameProcessed) {
+        while (true) {
             // 检查处理时间，避免阻塞事件循环
             gettimeofday(&current_time, NULL);
             long processing_time = (current_time.tv_sec - start_time.tv_sec) * 1000000 + 
@@ -445,14 +413,13 @@ private:
                 // 帧送入编码器后，立刻尝试拉取编码结果
                 ret = avcodec_receive_packet(fEncCtx, fEncPkt);
                 if (ret == 0) {
-                    frameProcessed = true;
+                    goto PACKET_READY;
                 } else if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
                     envir() << "Error: Failed to receive packet from encoder: " << ret << "\n";
                     handleRetry();
                     return;
                 }
-                // 只处理一帧，避免长时间阻塞
-                break;
+                continue; // 继续清空解码器缓存
             } else if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
                 envir() << "Error: Failed to receive frame from decoder: " << ret << "\n";
                 handleRetry();
@@ -474,7 +441,7 @@ private:
                     
                     ret = avcodec_receive_packet(fEncCtx, fEncPkt);
                     if (ret == 0) {
-                        frameProcessed = true;
+                        goto PACKET_READY;
                     } else {
                         handleClosure();
                         return;
@@ -493,22 +460,9 @@ private:
                 }
             }
             av_packet_unref(&inPkt);
-            // 只读取一个包，避免长时间阻塞
-            break;
         }
 
-        if (!frameProcessed) {
-            // 没有处理完一帧，下次继续
-            handleRetry();
-            return;
-        }
-
-        // 处理编码后的包
-        processEncodedPacket();
-    }
-
-    // 处理编码后的包
-    void processEncodedPacket() {
+    PACKET_READY:
         // x264 输出的数据天然是 Annex-B 格式，直接打包即可
         if (fEncPkt->size > fMaxSize) {
             fFrameSize = fMaxSize;
@@ -575,7 +529,6 @@ private:
     AVFrame* fDecFrame = nullptr;
     AVFrame* fEncFrame = nullptr;
     AVPacket* fEncPkt = nullptr;
-    bool fSentCoverFrame = false;
 };
 
 // ------------------------------------------------------------------
@@ -625,10 +578,6 @@ private:
             envir() << "Error: Failed to open input file: " << fFileName.c_str() << "\n";
             return;
         }
-        
-        // 增加探测时间和大小，确保能够正确读取封面图片信息
-        fmtCtx->probesize = 10000000; // 10MB
-        fmtCtx->max_analyze_duration = 5000000; // 5秒
         
         if (avformat_find_stream_info(fmtCtx, NULL) < 0) {
             envir() << "Error: Failed to find stream info\n";
@@ -725,8 +674,6 @@ private:
         AVDictionary* opt = NULL;
         av_dict_set(&opt, "aac_profile", "LC", 0);
         av_dict_set(&opt, "delay", "0", 0); // 最小化延迟
-        av_dict_set(&opt, "cutoff", "15000", 0); // 适当降低高频 cutoff，减少编码复杂度
-        av_dict_set(&opt, "strict", "experimental", 0); // 允许使用实验性特性
         
         if (avcodec_open2(fEncCtx, enc, &opt) < 0) {
             envir() << "Error: Failed to open encoder\n";
@@ -846,18 +793,14 @@ private:
         // 状态机：首先尝试从编码器拉取上一轮可能缓存的包
         int ret = avcodec_receive_packet(fEncCtx, fEncPkt);
         if (ret == 0) {
-            // 处理缓存的包
-            processEncodedAudioPacket();
-            return;
+            goto PACKET_READY;
         } else if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
             envir() << "Error: Failed to receive packet from encoder: " << ret << "\n";
             handleRetry();
             return;
         }
 
-        // 只处理一帧，避免长时间阻塞
-        bool frameProcessed = false;
-        while (!frameProcessed) {
+        while (true) {
             // 检查处理时间，避免阻塞事件循环
             gettimeofday(&current_time, NULL);
             long processing_time = (current_time.tv_sec - start_time.tv_sec) * 1000000 + 
@@ -891,14 +834,13 @@ private:
                 // 帧送入编码器后，立刻尝试拉取编码结果
                 ret = avcodec_receive_packet(fEncCtx, fEncPkt);
                 if (ret == 0) {
-                    frameProcessed = true;
+                    goto PACKET_READY;
                 } else if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
                     envir() << "Error: Failed to receive packet from encoder: " << ret << "\n";
                     handleRetry();
                     return;
                 }
-                // 只处理一帧，避免长时间阻塞
-                break;
+                continue; // 继续清空解码器缓存
             } else if (ret != AVERROR(EAGAIN) && ret != AVERROR_EOF) {
                 envir() << "Error: Failed to receive frame from decoder: " << ret << "\n";
                 handleRetry();
@@ -920,7 +862,7 @@ private:
                     
                     ret = avcodec_receive_packet(fEncCtx, fEncPkt);
                     if (ret == 0) {
-                        frameProcessed = true;
+                        goto PACKET_READY;
                     } else {
                         handleClosure();
                         return;
@@ -939,22 +881,9 @@ private:
                 }
             }
             av_packet_unref(&inPkt);
-            // 只读取一个包，避免长时间阻塞
-            break;
         }
 
-        if (!frameProcessed) {
-            // 没有处理完一帧，下次继续
-            handleRetry();
-            return;
-        }
-
-        // 处理编码后的包
-        processEncodedAudioPacket();
-    }
-
-    // 处理编码后的音频包
-    void processEncodedAudioPacket() {
+    PACKET_READY:
         if (fEncPkt->size > fMaxSize) {
             fFrameSize = fMaxSize;
             fNumTruncatedBytes = fEncPkt->size - fMaxSize;
@@ -987,13 +916,8 @@ private:
             fPresentationTime.tv_usec = 0;
         }
 
-        // 计算持续时间
-        if (fEncPkt->duration > 0) {
-            fDurationInMicroseconds = (unsigned)(fEncPkt->duration * fTimeBase * 1000000.0);
-        } else {
-            // 使用固定的持续时间，确保音频播放流畅
-            fDurationInMicroseconds = (unsigned)(1000000.0 * 1024 / 48000.0); // 1024 samples at 48kHz
-        }
+        // AAC 帧持续时间
+        fDurationInMicroseconds = (unsigned)(1000000.0 * fEncFrame->nb_samples / fEncCtx->sample_rate);
 
         av_packet_unref(fEncPkt);
         FramedSource::afterGetting(this);
@@ -1027,37 +951,33 @@ private:
 // ------------------------------------------------------------------
 class DynamicVideoSubsession : public OnDemandServerMediaSubsession {
 public:
-    static DynamicVideoSubsession* createNew(UsageEnvironment& env, std::string const& fileName, bool isH265, bool isMJPEG) {
-        return new DynamicVideoSubsession(env, fileName, isH265, isMJPEG);
+    static DynamicVideoSubsession* createNew(UsageEnvironment& env, std::string const& fileName, bool isH265) {
+        return new DynamicVideoSubsession(env, fileName, isH265);
     }
 
 protected:
-    DynamicVideoSubsession(UsageEnvironment& env, std::string const& fileName, bool isH265, bool isMJPEG)
-        : OnDemandServerMediaSubsession(env, True), fFileName(fileName), fIsH265(isH265), fIsMJPEG(isMJPEG) {}
+    DynamicVideoSubsession(UsageEnvironment& env, std::string const& fileName, bool isH265)
+        : OnDemandServerMediaSubsession(env, True), fFileName(fileName), fIsH265(isH265) {}
 
     virtual FramedSource* createNewStreamSource(unsigned, unsigned& estBitrate) {
         estBitrate = 50000; 
-        return FFmpegVideoSource::createNew(envir(), fFileName);
+        FFmpegVideoSource* baseSource = FFmpegVideoSource::createNew(envir(), fFileName);
+        
+        // 如果文件是原生 H265，走 H265Framer；如果是转码，输出恒定为 H264
+        if (fIsH265) return H265VideoStreamFramer::createNew(envir(), baseSource);
+        return H264VideoStreamFramer::createNew(envir(), baseSource);
     }
 
     virtual RTPSink* createNewRTPSink(Groupsock* rtpGroupsock, unsigned char rtpPayloadTypeIfDynamic, FramedSource*) {
-        // 优化网络缓冲区大小，提高传输效率
-        setSendBufferTo(envir(), rtpGroupsock->socketNum(), 32 * 1024 * 1024); 
+        setSendBufferTo(envir(), rtpGroupsock->socketNum(), 8 * 1024 * 1024); 
         
-        // 根据视频格式选择合适的RTP sink
-        if (fIsMJPEG) {
-            return JPEGVideoRTPSink::createNew(envir(), rtpGroupsock);
-        } else if (fIsH265) {
-            return H265VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic);
-        } else {
-            return H264VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic);
-        }
+        if (fIsH265) return H265VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic);
+        return H264VideoRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic);
     }
 
 private:
     std::string fFileName;
     bool fIsH265;
-    bool fIsMJPEG;
 };
 
 // ------------------------------------------------------------------
@@ -1079,8 +999,7 @@ protected:
     }
 
     virtual RTPSink* createNewRTPSink(Groupsock* rtpGroupsock, unsigned char rtpPayloadTypeIfDynamic, FramedSource*) {
-        // 优化网络缓冲区大小，提高传输效率
-        setSendBufferTo(envir(), rtpGroupsock->socketNum(), 16 * 1024 * 1024);
+        setSendBufferTo(envir(), rtpGroupsock->socketNum(), 2 * 1024 * 1024);
         return MPEG4GenericRTPSink::createNew(envir(), rtpGroupsock, rtpPayloadTypeIfDynamic, 48000, "audio", "AAC-hbr", "LC", 2);
     }
 
@@ -1115,7 +1034,7 @@ int main(int argc, char** argv) {
     TaskScheduler* scheduler = BasicTaskScheduler::createNew();
     UsageEnvironment* env = BasicUsageEnvironment::createNew(*scheduler);
 
-    RTSPServer* rtspServer = RTSPServer::createNew(*env, 8561);
+    RTSPServer* rtspServer = RTSPServer::createNew(*env, 8558);
     if (!rtspServer) {
         *env << "Error: " << env->getResultMsg() << "\n";
         return 1;
@@ -1144,10 +1063,6 @@ int main(int argc, char** argv) {
                 bool hasValidVideo = false;
                 bool hasValidAudio = false;
                 bool isNativeH265 = false;
-                bool isMJPEG = false;
-                int videoWidth = 0;
-                int videoHeight = 0;
-                bool isAudioOnly = true;
                 
                 for (unsigned i = 0; i < tempCtx->nb_streams; i++) {
                     AVCodecParameters* par = tempCtx->streams[i]->codecpar;
@@ -1156,10 +1071,6 @@ int main(int argc, char** argv) {
                         if (par->width > 0 && par->height > 0) {
                             hasValidVideo = true;
                             isNativeH265 = (par->codec_id == AV_CODEC_ID_HEVC);
-                            isMJPEG = (par->codec_id == AV_CODEC_ID_MJPEG);
-                            videoWidth = par->width;
-                            videoHeight = par->height;
-                            isAudioOnly = false;
                         }
                     } else if (par->codec_type == AVMEDIA_TYPE_AUDIO && par->codec_id != AV_CODEC_ID_NONE) {
                         hasValidAudio = true;
@@ -1171,7 +1082,7 @@ int main(int argc, char** argv) {
                     
                     // 添加视频流
                     if (hasValidVideo) {
-                        sms->addSubsession(DynamicVideoSubsession::createNew(*env, filename, isNativeH265, isMJPEG));
+                        sms->addSubsession(DynamicVideoSubsession::createNew(*env, filename, isNativeH265));
                     }
                     
                     // 添加音频流
